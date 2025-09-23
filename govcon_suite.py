@@ -1213,79 +1213,79 @@ def page_prm():
                         st.rerun()
                     except Exception as e:
                         st.error(f"Error saving changes: {str(e)}")
-            else:
-                st.info("No partners in database yet. Add some partners using the 'Add New Partner' tab.")
-
-        except Exception as e:
-            st.error(f"Database error: {str(e)}")
-
-    with tab2:
-        st.subheader("Add New Partner")
-
-        with st.form("add_partner_form"):
-            col1, col2 = st.columns(2)
-
-            with col1:
-                company_name = st.text_input("Company Name*", help="Required field")
-                contact_email = st.text_input("Contact Email")
-                website = st.text_input("Website URL")
-                trust_score = st.slider("Trust Score", 0, 100, 50, help="Initial trust rating (0-100)")
-
-            with col2:
-                capabilities = st.text_area("Capabilities", help="Enter capabilities separated by commas (e.g., Software Development, Cybersecurity, Cloud Services)")
-                contact_phone = st.text_input("Contact Phone")
-                location = st.text_input("Location")
-                vetting_notes = st.text_area("Vetting Notes", help="Internal notes about this partner")
-
-            submitted = st.form_submit_button("Add Partner")
-
-            if submitted:
-                if not company_name.strip():
-                    st.error("Company name is required!")
                 else:
-                    # Parse capabilities
-                    caps_list = [cap.strip() for cap in capabilities.split(',') if cap.strip()] if capabilities else []
+                    st.info("No partners in database yet. Add some partners using the 'Add New Partner' tab.")
 
-                    success, message = add_subcontractor_to_db(
-                        company_name=company_name.strip(),
-                        capabilities=caps_list,
-                        contact_email=contact_email.strip(),
-                        contact_phone=contact_phone.strip(),
-                        website=website.strip(),
-                        location=location.strip(),
-                        trust_score=trust_score,
-                        vetting_notes=vetting_notes.strip()
-                    )
+            except Exception as e:
+                st.error(f"Database error: {str(e)}")
 
-                    if success:
-                        st.success(message)
-                        st.rerun()
+        with tab2:
+            st.subheader("Add New Partner")
+
+            with st.form("add_partner_form"):
+                col1, col2 = st.columns(2)
+
+                with col1:
+                    company_name = st.text_input("Company Name*", help="Required field")
+                    contact_email = st.text_input("Contact Email")
+                    website = st.text_input("Website URL")
+                    trust_score = st.slider("Trust Score", 0, 100, 50, help="Initial trust rating (0-100)")
+
+                with col2:
+                    capabilities = st.text_area("Capabilities", help="Enter capabilities separated by commas (e.g., Software Development, Cybersecurity, Cloud Services)")
+                    contact_phone = st.text_input("Contact Phone")
+                    location = st.text_input("Location")
+                    vetting_notes = st.text_area("Vetting Notes", help="Internal notes about this partner")
+
+                submitted = st.form_submit_button("Add Partner")
+
+                if submitted:
+                    if not company_name.strip():
+                        st.error("Company name is required!")
                     else:
-                        st.error(message)
+                        # Parse capabilities
+                        caps_list = [cap.strip() for cap in capabilities.split(',') if cap.strip()] if capabilities else []
 
-    with tab3:
-        st.subheader("RFQ Management")
-        st.write("Generate and dispatch RFQs to selected partners for specific opportunities.")
+                        success, message = add_subcontractor_to_db(
+                            company_name=company_name.strip(),
+                            capabilities=caps_list,
+                            contact_email=contact_email.strip(),
+                            contact_phone=contact_phone.strip(),
+                            website=website.strip(),
+                            location=location.strip(),
+                            trust_score=trust_score,
+                            vetting_notes=vetting_notes.strip()
+                        )
 
-        # Get available opportunities
-        try:
-            engine = setup_database()
-            opportunities_df = pd.read_sql(
-                "SELECT notice_id, title, agency, response_deadline, p_win_score FROM opportunities WHERE status != 'Closed' ORDER BY p_win_score DESC LIMIT 20",
-                engine
-            )
+                        if success:
+                            st.success(message)
+                            st.rerun()
+                        else:
+                            st.error(message)
 
-            if not opportunities_df.empty:
-                # Select opportunity
-                selected_opp = st.selectbox(
-                    "Select Opportunity for RFQ",
-                    options=opportunities_df['notice_id'].tolist(),
-                    format_func=lambda x: f"{opportunities_df[opportunities_df['notice_id']==x]['title'].iloc[0]} (P-Win: {opportunities_df[opportunities_df['notice_id']==x]['p_win_score'].iloc[0]}%)"
+        with tab3:
+            st.subheader("RFQ Management")
+            st.write("Generate and dispatch RFQs to selected partners for specific opportunities.")
+
+            # Get available opportunities
+            try:
+                engine = setup_database()
+                opportunities_df = pd.read_sql(
+                    "SELECT notice_id, title, agency, response_deadline, p_win_score FROM opportunities WHERE status != 'Closed' ORDER BY p_win_score DESC LIMIT 20",
+                    engine
                 )
 
-                if selected_opp:
-                    opp_details = opportunities_df[opportunities_df['notice_id'] == selected_opp].iloc[0]
-                    st.info(f"**Selected:** {opp_details['title']}\n**Agency:** {opp_details['agency']}\n**Deadline:** {opp_details['response_deadline']}")
+                if not opportunities_df.empty:
+                    # Select opportunity
+                    selected_opp = st.selectbox(
+                        "Select Opportunity for RFQ",
+                        options=opportunities_df['notice_id'].tolist(),
+                        format_func=lambda x: f"{opportunities_df[opportunities_df['notice_id']==x]['title'].iloc[0]} (P-Win: {opportunities_df[opportunities_df['notice_id']==x]['p_win_score'].iloc[0]}%)"
+                    )
+
+                    if selected_opp:
+                        opp_details = opportunities_df[opportunities_df['notice_id'] == selected_opp].iloc[0]
+                        st.info(f"**Selected:** {opp_details['title']}\n**Agency:** {opp_details['agency']}\n**Deadline:** {opp_details['response_deadline']}")
 
                     # Get matching subcontractors
                     subcontractors = get_subcontractors_for_opportunity([])  # Get all for now
@@ -1332,8 +1332,8 @@ def page_prm():
                                             st.write(f"• **{partner_info['company_name']}** - {partner_info['contact_email']}")
                     else:
                         st.warning("No partners in database. Add partners first in the 'Add New Partner' tab.")
-            else:
-                st.info("No active opportunities available for RFQ generation.")
+                else:
+                    st.info("No active opportunities available for RFQ generation.")
 
         except Exception as e:
             st.error(f"Error loading opportunities: {str(e)}")

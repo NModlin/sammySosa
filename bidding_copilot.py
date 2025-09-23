@@ -238,19 +238,4 @@ if st.session_state.vector_store:
 else:
     st.info("Upload a Statement of Work in the sidebar to begin the AI-powered bidding process.")
 
-```
 
-### How to Use the Upgraded Co-pilot
-
-**Step 1: Install the New Library**
-* Open your terminal and run this command:
-    ```bash
-    pip install duckduckgo-search
-    ```
-
-**Step 2: Run the App**
-* Save the code above, overwriting your old Co-pilot script.
-* Run the app from your terminal as before:
-    ```bash
-    streamlit run ai_bidding_copilot_phase3_v3.py
-    
