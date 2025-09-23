@@ -1335,8 +1335,8 @@ def page_prm():
                 else:
                     st.info("No active opportunities available for RFQ generation.")
 
-        except Exception as e:
-            st.error(f"Error loading opportunities: {str(e)}")
+            except Exception as e:
+                st.error(f"Error loading opportunities: {str(e)}")
 
     except Exception as e:
         st.error(f"""
