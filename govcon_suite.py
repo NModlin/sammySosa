@@ -1105,8 +1105,6 @@ SOW TEXT:
                         except Exception as e:
                             st.error(f"Error processing requirements: {str(e)}")
                             st.text_area("Raw AI Response:", response, height=200)
-                else:
-                    st.warning("Upload and process a SOW document first.")
             else:
                 st.info("Click the button above to generate a compliance matrix.")
         else:
