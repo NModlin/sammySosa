@@ -4,8 +4,7 @@
 
 import os
 import json
-import time
-from datetime import datetime
+from datetime import datetime, timezone
 
 import pandas as pd
 import requests
@@ -14,7 +13,7 @@ try:
     from apscheduler.schedulers.background import BackgroundScheduler
 except Exception:
     BackgroundScheduler = None
-from sqlalchemy import create_engine, Table, Column, Integer, String, MetaData, Index
+from sqlalchemy import create_engine, Table, Column, Integer, String, MetaData, Index, text
 from sqlalchemy.dialects.postgresql import JSONB, insert, ARRAY
 from sqlalchemy.exc import IntegrityError
 
@@ -36,14 +35,31 @@ except Exception:
 # ------------------------
 # Configuration
 # ------------------------
-DB_CONNECTION_STRING = os.getenv(
-    "GOVCON_DB_URL",
-    # Local default (compose:5434 mapped to local)
-    "postgresql://postgres:mysecretpassword@localhost:5434/sam_contracts",
-)
-SAM_API_KEY = os.getenv("SAM_API_KEY", "")
+
+def get_database_url():
+    """
+    Get database URL with fallback for different environments.
+    """
+    # Check for explicit database URL first
+    if os.getenv("GOVCON_DB_URL"):
+        return os.getenv("GOVCON_DB_URL")
+
+    # Check for Streamlit Cloud secrets
+    if hasattr(st, 'secrets') and 'database' in st.secrets:
+        db_secrets = st.secrets['database']
+        return f"postgresql://{db_secrets['username']}:{db_secrets['password']}@{db_secrets['host']}:{db_secrets['port']}/{db_secrets['database']}"
+
+    # Check for individual environment variables
+    if all(os.getenv(var) for var in ['DB_HOST', 'DB_USER', 'DB_PASSWORD', 'DB_NAME']):
+        return f"postgresql://{os.getenv('DB_USER')}:{os.getenv('DB_PASSWORD')}@{os.getenv('DB_HOST')}:{os.getenv('DB_PORT', '5432')}/{os.getenv('DB_NAME')}"
+
+    # Local Docker default
+    return "postgresql://postgres:mysecretpassword@localhost:5434/sam_contracts"
+
+DB_CONNECTION_STRING = get_database_url()
+SAM_API_KEY = os.getenv("SAM_API_KEY", "") or (st.secrets.get("SAM_API_KEY", "") if hasattr(st, 'secrets') else "")
 API_KEY_EXPIRATION_DATE = os.getenv("API_KEY_EXPIRATION_DATE", "2025-12-21")
-SLACK_WEBHOOK_URL = os.getenv("SLACK_WEBHOOK_URL", "")
+SLACK_WEBHOOK_URL = os.getenv("SLACK_WEBHOOK_URL", "") or (st.secrets.get("SLACK_WEBHOOK_URL", "") if hasattr(st, 'secrets') else "")
 MODEL_PATH = os.getenv("GOVCON_MODEL_PATH", "mistral-7b-instruct-v0.1.Q4_K_M.gguf")
 
 SEARCH_PARAMS = {
@@ -52,10 +68,23 @@ SEARCH_PARAMS = {
 }
 
 # Global singletons (guarded for Streamlit reruns)
-if "_govcon_engine" not in st.session_state:
-    st.session_state._govcon_engine = None
-if "_govcon_scheduler_started" not in st.session_state:
-    st.session_state._govcon_scheduler_started = False
+def initialize_session_state():
+    """Initialize all session state variables to prevent KeyError issues."""
+    if "_govcon_engine" not in st.session_state:
+        st.session_state._govcon_engine = None
+    if "_govcon_scheduler_started" not in st.session_state:
+        st.session_state._govcon_scheduler_started = False
+    if "selected_opportunity" not in st.session_state:
+        st.session_state.selected_opportunity = None
+    if "vector_store" not in st.session_state:
+        st.session_state.vector_store = None
+    if "sow_analysis" not in st.session_state:
+        st.session_state.sow_analysis = None
+    if "doc_name" not in st.session_state:
+        st.session_state.doc_name = ""
+
+# Initialize session state
+initialize_session_state()
 
 # ------------------------
 # Notifications
@@ -154,12 +183,49 @@ def check_api_key_expiration():
 
 def get_engine():
     if st.session_state._govcon_engine is None:
-        st.session_state._govcon_engine = create_engine(DB_CONNECTION_STRING)
+        try:
+            engine = create_engine(DB_CONNECTION_STRING)
+            # Test the connection
+            with engine.connect() as conn:
+                conn.execute(text("SELECT 1"))
+            st.session_state._govcon_engine = engine
+        except Exception as e:
+            st.error(f"""
+            **Database Connection Error**
+
+            Unable to connect to the database. This could be due to:
+
+            1. **Missing Database Configuration**: If running on Streamlit Cloud, you need to configure database secrets
+            2. **Local Docker Not Running**: If running locally, make sure Docker containers are running
+            3. **Network Issues**: Check your internet connection and database accessibility
+
+            **Connection String**: `{DB_CONNECTION_STRING.split('@')[0]}@[REDACTED]`
+
+            **Error Details**: {str(e)}
+
+            **To Fix This:**
+            - **For Streamlit Cloud**: Add database secrets in your app settings under the "Secrets" tab
+            - **For Local Development**: Run `docker compose up -d` in your project directory
+
+            **Demo Mode**: You can continue without database functionality for demonstration purposes.
+            """)
+
+            # Offer demo mode
+            if st.button("Continue in Demo Mode (No Database)"):
+                st.session_state._govcon_engine = "demo_mode"
+                st.rerun()
+            else:
+                st.stop()
     return st.session_state._govcon_engine
 
 
 def setup_database():
     engine = get_engine()
+
+    # Handle demo mode
+    if engine == "demo_mode":
+        return engine
+
     metadata = MetaData()
     opportunities = Table(
         "opportunities",
@@ -285,7 +351,6 @@ def generate_analysis_summary(opportunity_data, p_win_score):
     Generate a brief analysis summary for the opportunity.
     """
     naics = opportunity_data.get("naicsCode", "N/A")
-    agency = opportunity_data.get("fullParentPathName", "N/A")
 
     summary_parts = [f"P-Win: {p_win_score}%"]
 
@@ -422,28 +487,6 @@ def generate_rfq(sow_text, opportunity_title, deadline):
     """
     Generate an RFQ document using LLM based on SOW text.
     """
-    prompt = f"""
-You are a procurement specialist creating a Request for Quote (RFQ) for subcontractors. Based on the following Statement of Work, create a professional RFQ document.
-
-OPPORTUNITY: {opportunity_title}
-DEADLINE: {deadline}
-
-SOW TEXT:
----
-{sow_text}
----
-
-Create an RFQ that includes:
-1. Project Overview
-2. Scope of Work Summary
-3. Key Requirements
-4. Deliverables Expected
-5. Timeline
-6. Submission Instructions
-
-Format as a professional business document.
-"""
-
     try:
         # This would use the LLM if available
         # For now, return a template
@@ -604,7 +647,7 @@ def run_scraper(date_from: str = None, date_to: str = None, naics: str = None):
         params.update({"postedFrom": date_from, "postedTo": date_to})
     else:
         # default: last 1 day window
-        today = datetime.utcnow().date()
+        today = datetime.now(timezone.utc).date()
         ymd = today.strftime("%m/%d/%Y")
         params.update({"postedFrom": ymd, "postedTo": ymd})
     if naics:
@@ -638,23 +681,59 @@ def ensure_scheduler():
 # ------------------------
 
 def page_dashboard():
-    st.title("Opportunity Dashboard")
-    ensure_scheduler()
-
-    c1, c2, c3 = st.columns(3)
-    with c1:
-        date_from = st.text_input("Posted From (MM/DD/YYYY)")
-    with c2:
-        date_to = st.text_input("Posted To (MM/DD/YYYY)")
-    with c3:
-        naics = st.text_input("NAICS (optional)")
-
-    if st.button("Run Scraper Now"):
-        with st.spinner("Fetching latest opportunities..."):
-            inserted = run_scraper(date_from or None, date_to or None, naics or None)
-        st.success(f"Scraper run complete. Inserted {inserted} new records.")
-
     try:
+        st.title("Opportunity Dashboard")
+
+        # Check if we're in demo mode
+        engine = setup_database()
+        if engine == "demo_mode":
+            st.warning("**Demo Mode**: Database functionality is disabled. This is a demonstration of the interface only.")
+            st.info("To enable full functionality, configure database connection in secrets or run locally with Docker.")
+
+            # Show demo data
+            demo_data = {
+                "notice_id": ["DEMO001", "DEMO002", "DEMO003"],
+                "title": ["Custom Software Development Services", "Cybersecurity Assessment and Implementation", "Cloud Infrastructure Migration"],
+                "agency": ["Department of Defense", "Department of Homeland Security", "General Services Administration"],
+                "p_win_score": [85, 92, 78],
+                "analysis_summary": ["High P-Win: NAICS match + positive keywords", "Excellent P-Win: Perfect capability alignment", "Good P-Win: Strong technical requirements match"],
+                "posted_date": ["2025-09-20", "2025-09-21", "2025-09-22"],
+                "response_deadline": ["2025-10-20", "2025-10-25", "2025-10-30"],
+                "status": ["Active", "Active", "Active"]
+            }
+
+            df_demo = pd.DataFrame(demo_data)
+            df_demo["Analyze"] = False
+
+            st.subheader("Demo Opportunities")
+            st.data_editor(
+                df_demo[["Analyze", "notice_id", "title", "agency", "p_win_score", "analysis_summary", "posted_date", "response_deadline", "status"]],
+                width="stretch",
+                column_config={
+                    "Analyze": st.column_config.CheckboxColumn("Select for Analysis"),
+                    "p_win_score": st.column_config.NumberColumn("P-Win %", min_value=0, max_value=100),
+                    "analysis_summary": st.column_config.TextColumn("Analysis", width="large"),
+                },
+                hide_index=True,
+                disabled=["notice_id", "title", "agency", "p_win_score", "analysis_summary", "posted_date", "response_deadline", "status"]
+            )
+            return
+
+        ensure_scheduler()
+
+        c1, c2, c3 = st.columns(3)
+        with c1:
+            date_from = st.text_input("Posted From (MM/DD/YYYY)")
+        with c2:
+            date_to = st.text_input("Posted To (MM/DD/YYYY)")
+        with c3:
+            naics = st.text_input("NAICS (optional)")
+
+        if st.button("Run Scraper Now"):
+            with st.spinner("Fetching latest opportunities..."):
+                inserted = run_scraper(date_from or None, date_to or None, naics or None)
+            st.success(f"Scraper run complete. Inserted {inserted} new records.")
+
         engine = setup_database()
         df = pd.read_sql(
             "SELECT notice_id, title, agency, posted_date, response_deadline, naics_code, set_aside, status, p_win_score, analysis_summary, raw_data FROM opportunities ORDER BY p_win_score DESC, posted_date DESC",
@@ -664,46 +743,71 @@ def page_dashboard():
         if "raw_data" in df.columns:
             df["raw_data"] = df["raw_data"].apply(lambda x: json.loads(x) if isinstance(x, str) else x)
 
-        if not df.empty:
-            # Add Analyze checkbox column for opportunity selection
-            df_display = df.copy()
-            df_display.insert(0, "Analyze", False)
+            if not df.empty:
+                # Add Analyze checkbox column for opportunity selection
+                df_display = df.copy()
+                df_display.insert(0, "Analyze", False)
 
-            # Create editable dataframe with checkbox column
-            edited_df = st.data_editor(
-                df_display[["Analyze", "notice_id", "title", "agency", "p_win_score", "analysis_summary", "posted_date", "response_deadline", "status"]],
-                use_container_width=True,
-                column_config={
-                    "Analyze": st.column_config.CheckboxColumn("Select for Analysis"),
-                    "p_win_score": st.column_config.NumberColumn("P-Win %", min_value=0, max_value=100),
-                    "analysis_summary": st.column_config.TextColumn("Analysis"),
-                },
-                hide_index=True,
-            )
+                # Create editable dataframe with checkbox column
+                edited_df = st.data_editor(
+                    df_display[["Analyze", "notice_id", "title", "agency", "p_win_score", "analysis_summary", "posted_date", "response_deadline", "status"]],
+                    width="stretch",
+                    column_config={
+                        "Analyze": st.column_config.CheckboxColumn("Select for Analysis"),
+                        "p_win_score": st.column_config.NumberColumn("P-Win %", min_value=0, max_value=100),
+                        "analysis_summary": st.column_config.TextColumn("Analysis"),
+                    },
+                    hide_index=True,
+                )
 
-            # Check for selected opportunities
-            selected_rows = edited_df[edited_df["Analyze"] == True]
-            if not selected_rows.empty:
-                selected_notice_id = selected_rows.iloc[0]["notice_id"]
-                selected_opportunity = df[df["notice_id"] == selected_notice_id].iloc[0]
+                # Check for selected opportunities
+                selected_rows = edited_df[edited_df["Analyze"] == True]
+                if not selected_rows.empty:
+                    selected_notice_id = selected_rows.iloc[0]["notice_id"]
+                    selected_opportunity = df[df["notice_id"] == selected_notice_id].iloc[0]
 
-                # Store selected opportunity in session state
-                st.session_state.selected_opportunity = selected_opportunity.to_dict()
+                    # Store selected opportunity in session state
+                    st.session_state.selected_opportunity = selected_opportunity.to_dict()
 
-                st.info(f"✅ Selected opportunity: **{selected_opportunity['title']}** (P-Win: {selected_opportunity['p_win_score']}%)\n\nNavigate to the **AI Co-pilot** page to analyze this opportunity.")
-        else:
-            st.info("No opportunities found. Run the scraper to fetch data.")
+                    st.info(f"✅ Selected opportunity: **{selected_opportunity['title']}** (P-Win: {selected_opportunity['p_win_score']}%)\n\nNavigate to the **AI Co-pilot** page to analyze this opportunity.")
+            else:
+                st.info("No opportunities found. Run the scraper to fetch data.")
 
-        st.header("View Full Opportunity Details")
-        if not df.empty:
-            options = [f"{row.title} ({row.notice_id[-6:]})" for _, row in df.iterrows()]
-            sel = st.selectbox("Select an opportunity:", options)
-            if sel:
-                suffix = sel.split("(")[-1][:-1]
-                row = df[df["notice_id"].str.endswith(suffix)].iloc[0]
-                st.json(row["raw_data"])  # type: ignore
+            st.header("View Full Opportunity Details")
+            if not df.empty:
+                options = [f"{row.title} ({row.notice_id[-6:]})" for _, row in df.iterrows()]
+                sel = st.selectbox("Select an opportunity:", options)
+                if sel:
+                    suffix = sel.split("(")[-1][:-1]
+                    row = df[df["notice_id"].str.endswith(suffix)].iloc[0]
+                    st.json(row["raw_data"])  # type: ignore
+            else:
+                st.info("No opportunities available to view details.")
+
     except Exception as e:
-        st.error(f"DB error: {e}")
+        st.error(f"""
+        **Dashboard Error**
+
+        An error occurred while loading the dashboard. This could be due to:
+
+        1. **Database Connection Issues**: Check your database connection
+        2. **Data Processing Error**: Issue with opportunity data
+        3. **Session State Issues**: Try refreshing the page
+
+        **Error Details**: {str(e)}
+
+        **To Fix This:**
+        - Try refreshing the page (F5)
+        - Check database connection
+        - Use Demo Mode if database is unavailable
+        """)
+
+        # Show debug information
+        with st.expander("Debug Information"):
+            st.write("**Error Type:**", type(e).__name__)
+            st.write("**Error Message:**", str(e))
+            import traceback
+            st.code(traceback.format_exc())
 
 # ------------------------
 # AI Co‑pilot (Phase 3)
@@ -774,69 +878,71 @@ def execute_ai_task(llm, prompt):
 
 
 def page_ai_copilot():
-    st.title("AI Bidding Co‑pilot")
-    _require_ai_libs()
+    try:
+        st.title("AI Bidding Co‑pilot")
+        _require_ai_libs()
 
-    # Check for selected opportunity from dashboard
-    if 'selected_opportunity' in st.session_state and st.session_state.selected_opportunity:
-        opp = st.session_state.selected_opportunity
-        st.success(f"🎯 **Analyzing Opportunity:** {opp['title']}")
-        st.info(f"**Agency:** {opp['agency']} | **P-Win Score:** {opp['p_win_score']}% | **NAICS:** {opp['naics_code']}")
+        # Check for selected opportunity from dashboard
+        if 'selected_opportunity' in st.session_state and st.session_state.selected_opportunity:
+            opp = st.session_state.selected_opportunity
+            st.success(f"🎯 **Analyzing Opportunity:** {opp['title']}")
+            st.info(f"**Agency:** {opp['agency']} | **P-Win Score:** {opp['p_win_score']}% | **NAICS:** {opp['naics_code']}")
 
-        if st.button("Clear Selection"):
-            del st.session_state.selected_opportunity
-            st.rerun()
-    else:
-        st.warning("⚠️ No opportunity selected. Please go to the **Dashboard** page and select an opportunity to analyze.")
-        st.stop()
-
-    if 'vector_store' not in st.session_state:
-        st.session_state.vector_store = None
-    if 'sow_analysis' not in st.session_state:
-        st.session_state.sow_analysis = None
-    if 'doc_name' not in st.session_state:
-        st.session_state.doc_name = ""
-
-    with st.sidebar:
-        st.header("1. Upload Document")
-        uploaded = st.file_uploader("Upload a SOW (PDF or DOCX)", type=["pdf", "docx"])
-        if st.button("Process Document"):
-            if uploaded:
-                with st.spinner("Reading and analyzing document..."):
-                    docs, error = load_document_text(uploaded)
-                    if error:
-                        st.error(error)
-                    else:
-                        st.session_state.vector_store = create_vector_store(docs)
-                        st.session_state.doc_name = uploaded.name
-                        st.session_state.sow_analysis = None
-                        st.success(f"Processed '{st.session_state.doc_name}'.")
-            else:
-                st.warning("Please upload a document first.")
-
-    if st.session_state.vector_store:
-        st.header(f"Analysis for: :blue[{st.session_state.doc_name}]")
-        llm = setup_llm()
-        if not llm:
+            if st.button("Clear Selection"):
+                del st.session_state.selected_opportunity
+                st.rerun()
+        else:
+            st.warning("⚠️ No opportunity selected. Please go to the **Dashboard** page and select an opportunity to analyze.")
             st.stop()
-        index, chunks, refs, model = st.session_state.vector_store
 
-        tab1, tab2, tab3, tab4, tab5 = st.tabs(["SOW Analysis", "Draft Subcontractor SOW", "Find Local Partners", "Proposal Outline", "Compliance Matrix"])
+        if 'vector_store' not in st.session_state:
+            st.session_state.vector_store = None
+        if 'sow_analysis' not in st.session_state:
+            st.session_state.sow_analysis = None
+        if 'doc_name' not in st.session_state:
+            st.session_state.doc_name = ""
 
-        with tab1:
-            st.subheader("Extract Key SOW Details")
-            if st.button("Extract SOW Details"):
-                with st.spinner("AI analyzing the SOW..."):
-                    query = "Extract Scope, Technical Specs, Performance Metrics, Timeline/Milestones, Evaluation Criteria."
-                    context = get_context(index, model, query, chunks)
-                    prompt = f"""
+        with st.sidebar:
+            st.header("1. Upload Document")
+            uploaded = st.file_uploader("Upload a SOW (PDF or DOCX)", type=["pdf", "docx"])
+            if st.button("Process Document"):
+                if uploaded:
+                    with st.spinner("Reading and analyzing document..."):
+                        docs, error = load_document_text(uploaded)
+                        if error:
+                            st.error(error)
+                        else:
+                            st.session_state.vector_store = create_vector_store(docs)
+                            st.session_state.doc_name = uploaded.name
+                            st.session_state.sow_analysis = None
+                            st.success(f"Processed '{st.session_state.doc_name}'.")
+                else:
+                    st.warning("Please upload a document first.")
+
+        if st.session_state.vector_store:
+            st.header(f"Analysis for: :blue[{st.session_state.doc_name}]")
+            llm = setup_llm()
+            if not llm:
+                st.stop()
+            index, chunks, _, model = st.session_state.vector_store
+
+            tab1, tab2, tab3, tab4, tab5 = st.tabs(["SOW Analysis", "Draft Subcontractor SOW", "Find Local Partners", "Proposal Outline", "Compliance Matrix"])
+
+            with tab1:
+                st.subheader("Extract Key SOW Details")
+                if st.button("Extract SOW Details"):
+                    with st.spinner("AI analyzing the SOW..."):
+                        query = "Extract Scope, Technical Specs, Performance Metrics, Timeline/Milestones, Evaluation Criteria."
+                        context = get_context(index, model, query, chunks)
+                        prompt = f"""
 You are a government contract analyst. Based ONLY on the following context from a Statement of Work (SOW), extract the requested information in Markdown.\n\nCONTEXT:\n{context}\n\nTASK:\n1. Scope of Work\n2. Technical Specifications\n3. Performance Metrics\n4. Timeline and Milestones\n5. Evaluation Criteria
 """
-                    analysis = execute_ai_task(llm, prompt)
+                        analysis = execute_ai_task(llm, prompt)
                     st.session_state.sow_analysis = analysis
                     st.markdown(analysis)
-            elif st.session_state.sow_analysis:
-                st.markdown(st.session_state.sow_analysis)
+
+                if st.session_state.sow_analysis:
+                    st.markdown(st.session_state.sow_analysis)
 
         with tab2:
             st.subheader("Generate Statement of Work for Subcontractors")
@@ -947,8 +1053,7 @@ You are a proposal manager. Based ONLY on the 'Evaluation Criteria' from the SOW
                         # Get full SOW text for requirement extraction
                         context = get_context(index, model, "requirements contractor shall must will", chunks)
 
-                        prompt = f"""
-You are a government contract compliance specialist. Analyze the following text from a Statement of Work. Extract every sentence that contains a direct requirement for the contractor (phrases like "the contractor shall," "the offeror must," "the system will," etc.).
+                        prompt = f"""You are a government contract compliance specialist. Analyze the following text from a Statement of Work. Extract every sentence that contains a direct requirement for the contractor (phrases like "the contractor shall," "the offeror must," "the system will," etc.).
 
 Return the output as a JSON array of objects, where each object has two keys: "requirement_text" and "sow_section".
 
@@ -976,7 +1081,7 @@ SOW TEXT:
                                 # Display editable dataframe
                                 edited_requirements = st.data_editor(
                                     df_requirements,
-                                    use_container_width=True,
+                                    width="stretch",
                                     column_config={
                                         "requirement_text": st.column_config.TextColumn("Requirement", width="large"),
                                         "sow_section": st.column_config.TextColumn("SOW Section", width="medium"),
@@ -1002,18 +1107,46 @@ SOW TEXT:
                             st.text_area("Raw AI Response:", response, height=200)
                 else:
                     st.warning("Upload and process a SOW document first.")
-    else:
-        st.info("Upload a Statement of Work in the sidebar to begin the AI-powered bidding process.")
+            else:
+                st.info("Click the button above to generate a compliance matrix.")
+        else:
+            st.info("Upload a Statement of Work in the sidebar to begin the AI-powered bidding process.")
+
+    except Exception as e:
+        st.error(f"""
+        **AI Co-pilot Error**
+
+        An error occurred while loading the AI Co-pilot. This could be due to:
+
+        1. **Missing AI Libraries**: Some AI/ML dependencies may not be installed
+        2. **Model Loading Issues**: AI model files may be missing or corrupted
+        3. **Session State Issues**: Try refreshing the page
+
+        **Error Details**: {str(e)}
+
+        **To Fix This:**
+        - Try refreshing the page (F5)
+        - Check that all AI dependencies are installed
+        - Ensure model files are available
+        """)
+
+        # Show debug information
+        with st.expander("Debug Information"):
+            st.write("**Error Type:**", type(e).__name__)
+            st.write("**Error Message:**", str(e))
+            import traceback
+            st.code(traceback.format_exc())
 
 # ------------------------
 # Partner Relationship Manager (Phase 3)
 # ------------------------
 
 def page_prm():
-    st.title("Partner Relationship Manager")
-    st.write("Manage your subcontractor network and partner relationships.")
+    try:
+        st.title("Partner Relationship Manager")
+        st.write("Manage your subcontractor network and partner relationships.")
 
-    tab1, tab2, tab3 = st.tabs(["Manage Partners", "Add New Partner", "RFQ Management"])
+        tab1, tab2, tab3 = st.tabs(["Manage Partners", "Add New Partner", "RFQ Management"])
 
     with tab1:
         st.subheader("Current Partners")
@@ -1038,7 +1171,7 @@ def page_prm():
                 # Display editable dataframe
                 edited_df = st.data_editor(
                     df,
-                    use_container_width=True,
+                    width="stretch",
                     column_config={
                         "id": st.column_config.NumberColumn("ID", disabled=True),
                         "company_name": st.column_config.TextColumn("Company Name", width="medium"),
@@ -1187,8 +1320,6 @@ def page_prm():
 
                                     # Simulate sending RFQs
                                     if st.button("Send RFQs to Selected Partners"):
-                                        selected_partner_ids = [partner_options[p] for p in selected_partners]
-
                                         # In a real implementation, this would:
                                         # 1. Save RFQ to database
                                         # 2. Send emails to partners
@@ -1211,18 +1342,77 @@ def page_prm():
         except Exception as e:
             st.error(f"Error loading opportunities: {str(e)}")
 
+    except Exception as e:
+        st.error(f"""
+        **Partner Relationship Manager Error**
+
+        An error occurred while loading the PRM. This could be due to:
+
+        1. **Database Connection Issues**: Check your database connection
+        2. **Data Processing Error**: Issue with partner data
+        3. **Session State Issues**: Try refreshing the page
+
+        **Error Details**: {str(e)}
+
+        **To Fix This:**
+        - Try refreshing the page (F5)
+        - Check database connection
+        - Verify partner data integrity
+        """)
+
+        # Show debug information
+        with st.expander("Debug Information"):
+            st.write("**Error Type:**", type(e).__name__)
+            st.write("**Error Message:**", str(e))
+            import traceback
+            st.code(traceback.format_exc())
+
 # ------------------------
 # App Layout
 # ------------------------
 
 st.set_page_config(layout="wide", page_title="GovCon Suite")
+
+# Initialize session state on every run
+initialize_session_state()
+
 st.sidebar.title("GovCon Suite Navigation")
 page = st.sidebar.radio("Go to", ["Opportunity Dashboard", "AI Bidding Co‑pilot", "Partner Relationship Manager"])
 
-if page == "Opportunity Dashboard":
-    page_dashboard()
-elif page == "AI Bidding Co‑pilot":
-    page_ai_copilot()
-elif page == "Partner Relationship Manager":
-    page_prm()
+# Add error handling for page navigation
+try:
+    if page == "Opportunity Dashboard":
+        page_dashboard()
+    elif page == "AI Bidding Co‑pilot":
+        page_ai_copilot()
+    elif page == "Partner Relationship Manager":
+        page_prm()
+except Exception as e:
+    st.error(f"""
+    **Application Error**
+
+    An error occurred while loading the page. This could be due to:
+
+    1. **Missing Dependencies**: Some AI/ML libraries may not be installed
+    2. **Database Connection Issues**: Check your database connection
+    3. **Session State Issues**: Try refreshing the page
+
+    **Error Details**: {str(e)}
+
+    **To Fix This:**
+    - Try refreshing the page (F5)
+    - Check the Docker containers are running: `docker compose ps`
+    - Check the application logs: `docker compose logs app`
+    """)
+
+    # Show debug information
+    with st.expander("Debug Information"):
+        st.write("**Session State:**")
+        st.json(dict(st.session_state))
+        st.write("**Error Type:**", type(e).__name__)
+        st.write("**Error Message:**", str(e))
+
+        import traceback
+        st.write("**Full Traceback:**")
+        st.code(traceback.format_exc())
 
