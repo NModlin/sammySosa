@@ -1,0 +1,37 @@
+
+services:
+  app:
+    build: .
+    command: streamlit run Apollo_GovCon.py --server.port 8501 --server.address 0.0.0.0
+    ports:
+      - "8501:8501"
+    environment:
+      - GOVCON_DB_URL=postgresql://postgres:mysecretpassword@db:5432/sam_contracts
+      - SAM_API_KEY=${SAM_API_KEY}
+      - SLACK_WEBHOOK_URL=${SLACK_WEBHOOK_URL}
+      - API_KEY_EXPIRATION_DATE=${API_KEY_EXPIRATION_DATE:-2025-12-21}
+      - GOVCON_MODEL_PATH=/models/mistral-7b-instruct-v0.1.Q4_K_M.gguf
+    volumes:
+      - ./models:/models
+    healthcheck:
+      test:
+        - CMD
+        - python
+        - -c
+        - "import urllib.request, sys; sys.exit(0) if urllib.request.urlopen('http://127.0.0.1:8501/', timeout=5).getcode()==200 else sys.exit(1)"
+      interval: 30s
+      timeout: 5s
+      retries: 5
+      start_period: 30s
+    depends_on:
+      - db
+  db:
+    image: postgres:15-alpine
+    environment:
+      POSTGRES_USER: postgres
+      POSTGRES_PASSWORD: mysecretpassword
+      POSTGRES_DB: sam_contracts
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+volumes:
+  postgres_data:

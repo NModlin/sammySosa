@@ -1,0 +1,14 @@
+streamlit
+sqlalchemy
+psycopg2-binary
+pandas
+requests
+apscheduler
+
+# Co-pilot libraries
+PyMuPDF
+python-docx
+sentence-transformers
+faiss-cpu
+ctransformers
+duckduckgo-search
