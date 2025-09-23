@@ -1107,8 +1107,6 @@ SOW TEXT:
                             st.text_area("Raw AI Response:", response, height=200)
             else:
                 st.info("Click the button above to generate a compliance matrix.")
-        else:
-            st.info("Upload a Statement of Work in the sidebar to begin the AI-powered bidding process.")
 
     except Exception as e:
         st.error(f"""
@@ -1146,45 +1144,45 @@ def page_prm():
 
         tab1, tab2, tab3 = st.tabs(["Manage Partners", "Add New Partner", "RFQ Management"])
 
-    with tab1:
-        st.subheader("Current Partners")
+        with tab1:
+            st.subheader("Current Partners")
 
-        try:
-            engine = setup_database()
-
-            # Try to get subcontractors, create table if it doesn't exist
             try:
-                df = pd.read_sql(
-                    "SELECT id, company_name, capabilities, contact_email, contact_phone, website, location, trust_score, vetting_notes, created_date FROM subcontractors ORDER BY trust_score DESC, company_name",
-                    engine
-                )
-            except Exception:
-                # Table doesn't exist, create it
-                metadata = MetaData()
-                metadata.reflect(bind=engine)
-                metadata.create_all(engine)
-                df = pd.DataFrame()  # Empty dataframe
+                engine = setup_database()
 
-            if not df.empty:
-                # Display editable dataframe
-                edited_df = st.data_editor(
-                    df,
-                    width="stretch",
-                    column_config={
-                        "id": st.column_config.NumberColumn("ID", disabled=True),
-                        "company_name": st.column_config.TextColumn("Company Name", width="medium"),
-                        "capabilities": st.column_config.ListColumn("Capabilities"),
-                        "contact_email": st.column_config.TextColumn("Email", width="medium"),
-                        "contact_phone": st.column_config.TextColumn("Phone", width="small"),
-                        "website": st.column_config.LinkColumn("Website", width="medium"),
-                        "location": st.column_config.TextColumn("Location", width="medium"),
-                        "trust_score": st.column_config.NumberColumn("Trust Score", min_value=0, max_value=100, width="small"),
-                        "vetting_notes": st.column_config.TextColumn("Notes", width="large"),
-                        "created_date": st.column_config.DateColumn("Added", disabled=True),
-                    },
-                    hide_index=True,
-                    num_rows="dynamic"
-                )
+                # Try to get subcontractors, create table if it doesn't exist
+                try:
+                    df = pd.read_sql(
+                        "SELECT id, company_name, capabilities, contact_email, contact_phone, website, location, trust_score, vetting_notes, created_date FROM subcontractors ORDER BY trust_score DESC, company_name",
+                        engine
+                    )
+                except Exception:
+                    # Table doesn't exist, create it
+                    metadata = MetaData()
+                    metadata.reflect(bind=engine)
+                    metadata.create_all(engine)
+                    df = pd.DataFrame()  # Empty dataframe
+
+                if not df.empty:
+                    # Display editable dataframe
+                    edited_df = st.data_editor(
+                        df,
+                        width="stretch",
+                        column_config={
+                            "id": st.column_config.NumberColumn("ID", disabled=True),
+                            "company_name": st.column_config.TextColumn("Company Name", width="medium"),
+                            "capabilities": st.column_config.ListColumn("Capabilities"),
+                            "contact_email": st.column_config.TextColumn("Email", width="medium"),
+                            "contact_phone": st.column_config.TextColumn("Phone", width="small"),
+                            "website": st.column_config.LinkColumn("Website", width="medium"),
+                            "location": st.column_config.TextColumn("Location", width="medium"),
+                            "trust_score": st.column_config.NumberColumn("Trust Score", min_value=0, max_value=100, width="small"),
+                            "vetting_notes": st.column_config.TextColumn("Notes", width="large"),
+                            "created_date": st.column_config.DateColumn("Added", disabled=True),
+                        },
+                        hide_index=True,
+                        num_rows="dynamic"
+                    )
 
                 if st.button("Save Changes"):
                     # Update database with changes
