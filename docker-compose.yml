@@ -13,6 +13,7 @@ services:
       - GOVCON_MODEL_PATH=/models/mistral-7b-instruct-v0.1.Q4_K_M.gguf
     volumes:
       - ./models:/models
+      - .:/app
     healthcheck:
       test:
         - CMD
