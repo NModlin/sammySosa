@@ -11,7 +11,7 @@ python-docx
 sentence-transformers
 faiss-cpu
 ctransformers
-duckduckgo-search
+ddgs
 
 # Phase 3 & 4 Dependencies
 # Email functionality for RFQ system

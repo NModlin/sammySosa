@@ -6,7 +6,7 @@ services:
     ports:
       - "8501:8501"
     environment:
-      - GOVCON_DB_URL=postgresql://postgres:mysecretpassword@db:5432/sam_contracts
+      - GOVCON_DB_URL=postgresql://postgres:${DB_PASSWORD:-mysecretpassword}@db:5432/sam_contracts
       - SAM_API_KEY=${SAM_API_KEY}
       - SLACK_WEBHOOK_URL=${SLACK_WEBHOOK_URL}
       - API_KEY_EXPIRATION_DATE=${API_KEY_EXPIRATION_DATE:-2025-12-21}
@@ -28,9 +28,11 @@ services:
       - db
   db:
     image: postgres:15-alpine
+    ports:
+      - "5434:5432"
     environment:
       POSTGRES_USER: postgres
-      POSTGRES_PASSWORD: mysecretpassword
+      POSTGRES_PASSWORD: ${DB_PASSWORD:-mysecretpassword}
       POSTGRES_DB: sam_contracts
     volumes:
       - postgres_data:/var/lib/postgresql/data

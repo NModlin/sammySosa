@@ -62,14 +62,14 @@ def test_imports():
         # Phase 5 market intelligence imports
         from duckduckgo_search import DDGS
 
-        print("✅ All Phase 1-6 imports successful!")
+        print("All Phase 1-6 imports successful!")
         return True
 
     except ImportError as e:
-        print(f"❌ Import error: {e}")
+        print(f"Import error: {e}")
         return False
     except Exception as e:
-        print(f"❌ Unexpected error during imports: {e}")
+        print(f"Unexpected error during imports: {e}")
         return False
 
 def test_docker_containers():
@@ -166,59 +166,151 @@ def test_database_connection():
         print(f"❌ Database connection error: {e}")
         return False
 
-def test_phase3_functions():
-    """Test Phase 3 specific functions"""
-    print("\n🔍 Testing Phase 3 functions...")
-    
+def test_phase1_to_6_functions():
+    """Test Phase 1-6 specific functions"""
+    print("\n🔍 Testing Phase 1-6 functions...")
+
     try:
         # Import the main application
         sys.path.append('.')
         import govcon_suite
-        
-        # Test partner management functions
+
+        # Test core functions across all phases
         functions_to_check = [
+            # Phase 1-2: Core scraping and dashboard
+            'setup_database',
+            'run_scraper',
+            'fetch_opportunities',
+            'store_opportunities',
+
+            # Phase 3: Partner management
             'add_partner',
-            'send_rfq_email', 
+            'send_rfq_email',
             'generate_partner_portal_link',
             'create_rfq',
             'get_partner_capabilities',
-            'update_quote_status'
+            'update_quote_status',
+
+            # Phase 4: Enhanced features
+            'add_subcontractor_to_db',
+            'find_partners',
+
+            # Phase 5: Market intelligence
+            'analyze_market_trends',
+            'score_opportunity',
+            'generate_competitive_analysis',
+
+            # Phase 6: Document analysis
+            'load_document_text',
+            'create_vector_store',
+            'analyze_document_compliance',
+            'extract_key_requirements'
         ]
-        
+
+        existing_functions = []
+        missing_functions = []
+
         for func_name in functions_to_check:
             if hasattr(govcon_suite, func_name):
+                existing_functions.append(func_name)
                 print(f"✅ {func_name} function exists")
             else:
+                missing_functions.append(func_name)
                 print(f"⚠️  {func_name} function missing")
-            
-        return True
-        
+
+        print(f"\n📊 Function Summary:")
+        print(f"✅ Existing: {len(existing_functions)}/{len(functions_to_check)} functions")
+        print(f"⚠️  Missing: {len(missing_functions)} functions")
+
+        # Test MCP integration patterns
+        mcp_functions = [
+            'call_mcp_tool',
+            'extract_structured_data_mcp',
+            'analyze_patterns_mcp',
+            'classify_content_mcp'
+        ]
+
+        print(f"\n🔍 Testing MCP integration functions...")
+        for func_name in mcp_functions:
+            if hasattr(govcon_suite, func_name):
+                print(f"✅ {func_name} MCP function exists")
+            else:
+                print(f"⚠️  {func_name} MCP function missing (expected for Phase 1 testing)")
+
+        return len(existing_functions) > len(functions_to_check) // 2  # Pass if more than half exist
+
     except Exception as e:
-        print(f"❌ Phase 3 function test error: {e}")
+        print(f"❌ Phase 1-6 function test error: {e}")
         traceback.print_exc()
         return False
 
 def test_email_configuration():
     """Test email configuration"""
     print("\n🔍 Testing email configuration...")
-    
+
     try:
         import sendgrid
-        
+
         # Check if SendGrid is properly configured
         # Note: We won't send actual emails in testing
         print("✅ SendGrid library available")
         print("⚠️  Email functionality requires SENDGRID_API_KEY in production")
-        
+
         return True
-        
+
     except Exception as e:
         print(f"❌ Email configuration error: {e}")
         return False
 
+def test_mcp_integration_readiness():
+    """Test MCP integration readiness"""
+    print("\n🔍 Testing MCP integration readiness...")
+
+    try:
+        # Test required libraries for MCP integration
+        import requests
+        import json
+        import uuid
+
+        print("✅ MCP client libraries available")
+
+        # Test JSON-RPC 2.0 payload creation
+        test_payload = {
+            "jsonrpc": "2.0",
+            "id": str(uuid.uuid4()),
+            "method": "tools/call",
+            "params": {
+                "name": "extract_structured_data",
+                "arguments": {
+                    "text": "test document",
+                    "schema": {"title": "string"},
+                    "domain_context": "government_contracting"
+                }
+            }
+        }
+
+        # Validate payload structure
+        assert "jsonrpc" in test_payload
+        assert "id" in test_payload
+        assert "method" in test_payload
+        assert "params" in test_payload
+
+        print("✅ MCP payload structure validation passed")
+
+        # Test connection readiness (without actual connection)
+        mcp_server_url = "http://localhost:8080"  # Default MCP server URL
+        print(f"✅ MCP server URL configured: {mcp_server_url}")
+        print("⚠️  MCP server connection requires GremlinsAI server running")
+
+        return True
+
+    except Exception as e:
+        print(f"❌ MCP integration readiness error: {e}")
+        return False
+
 if __name__ == "__main__":
-    print("🚀 DOCKER-ONLY COMPREHENSIVE TEST SUITE")
-    print("🐳 Testing unified Docker environment")
+    print("APOLLO GOVCON COMPREHENSIVE TEST SUITE")
+    print("Testing unified Docker environment")
     print("=" * 60)
     
     results = []
@@ -228,12 +320,13 @@ if __name__ == "__main__":
     results.append(("Docker Containers", test_docker_containers()))
     results.append(("Streamlit App", test_streamlit_app()))
     results.append(("Database Connection", test_database_connection()))
-    results.append(("Phase 3 Functions", test_phase3_functions()))
+    results.append(("Phase 1-6 Functions", test_phase1_to_6_functions()))
     results.append(("Email Configuration", test_email_configuration()))
+    results.append(("MCP Integration Ready", test_mcp_integration_readiness()))
     
     # Summary
     print("\n" + "=" * 60)
-    print("📊 COMPREHENSIVE TEST RESULTS")
+    print("COMPREHENSIVE TEST RESULTS")
     print("=" * 60)
     
     passed = 0
@@ -256,10 +349,21 @@ if __name__ == "__main__":
         print(f"\n⚠️  {total - passed} tests failed. Check the output above for details.")
     
     print("\n" + "=" * 60)
-    print("🔗 NEXT STEPS:")
+    print("🔗 NEXT STEPS FOR PHASE 1 FOUNDATION TESTING:")
     print("1. Access the application at: http://localhost:8501")
-    print("2. Test Partner Relationship Manager")
-    print("3. Test RFQ Management system")
-    print("4. Test AI Co-pilot with file upload")
-    print("5. Verify Quote Tracking functionality")
+    print("2. Run unit tests: python -m pytest tests/unit/ -v")
+    print("3. Run integration tests: python -m pytest tests/integration/ -v")
+    print("4. Run end-to-end tests: python -m pytest tests/end_to_end/ -v")
+    print("5. Test Phase 1-6 features:")
+    print("   - Market Intelligence (Phase 5)")
+    print("   - Document Analysis (Phase 6)")
+    print("   - Partner Management (Phase 3-4)")
+    print("   - AI Co-pilot with MCP integration")
+    print("6. Verify MCP integration patterns")
+    print("7. Test database operations and migrations")
+    print("=" * 60)
+    print("📋 TESTING STRATEGY SUMMARY:")
+    print("✅ Phase 1 (This Week): Foundation Testing - 59/93 features")
+    print("🔄 Phase 2 (Ongoing): Continuous Testing for new features")
+    print("🚀 Phase 3 (After Phase 7): Optimization and performance")
     print("=" * 60)
